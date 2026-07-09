@@ -1,0 +1,115 @@
+# ============================================================
+# 行业板块 AI 研究平台 - 定时调度配置
+# ============================================================
+# schedule 字段使用标准 5 位 cron 表达式：
+#   分 时 日 月 星期（0=周日，1=周一，...，6=周六）
+# 示例：
+#   "0 9 1 * *"      每月1日 09:00
+#   "30 15 * * 1-5"  工作日 15:30
+#   "0 19 * * 0"     每周日 19:00
+#   "0 20 28 * *"    每月28日 20:00（近似月末）
+# ============================================================
+
+# ------------------------------------------------------------
+# NBS（国家统计局）数据拉取任务
+# 各项数据发布时间不同，因此定义多个独立任务。
+# trigger_macro: true 表示拉取完成后立即触发 MacroAgent 重新分析。
+# ------------------------------------------------------------
+nbs_tasks:
+  cpi_ppi:
+    enabled: true
+    schedule: "0 10 9 * *"          # 每月9日 10:00（CPI/PPI通常在9日前后发布）
+    indicators: [cpi_yoy, ppi_yoy]
+    trigger_macro: true
+    description: "居民消费价格指数 & 工业生产者出厂价格指数"
+
+  purchase_manager_index:
+    enabled: true
+    schedule: "0 9 1 * *"           # 每月1日 09:00（PMI于1日公布）
+    indicators: [manufacturing_pmi, non_mfg_pmi, composite_pmi]
+    trigger_macro: true
+    description: "制造业/非制造业/综合PMI采购经理指数"
+
+  industrial_yoy:
+    enabled: true
+    schedule: "0 10 15 * *"         # 每月15日 10:00（工业增加值约在15日前后）
+    indicators: [industrial_yoy]
+    trigger_macro: true
+    description: "规上工业增加值同比增长"
+
+  industrial_profit:
+    enabled: true
+    schedule: "0 10 27 * *"         # 每月27日 10:00（工业企业利润约在月末发布）
+    indicators_all_profit: true      # 使用 INDUSTRY_PROFIT_INDICS 全部45项
+    trigger_macro: true
+    description: "工业企业按行业营业利润累计增长（45项）"
+
+# ------------------------------------------------------------
+# Agent 定时分析任务
+# ------------------------------------------------------------
+agents:
+  heat:
+    enabled: true
+    schedule: "30 15 * * 1-5"       # 工作日收盘后 15:30
+    expire_hours: 20                 # 分析结果有效期（小时）
+    description: "板块热度雷达（THS行情数据 + 指数衰减记忆）"
+
+  macro:
+    enabled: true
+    trigger: event                   # 不定时，由 nbs 数据更新事件触发
+    expire_hours: 720                # 月度数据，30天内有效
+    description: "宏观分析（事件驱动，NBS数据更新后自动触发）"
+
+  news:
+    enabled: true
+    schedule: "0 8 * * 1-5"         # 工作日 08:00
+    expire_hours: 20
+    description: "新闻流量分析（22平台热点 → LLM板块映射）"
+
+  quant:
+    enabled: true
+    schedule: "0 16 * * 1-5"        # 工作日 16:00
+    expire_hours: 20
+    description: "量化分析（趋势动量 + 放量 + 相对强弱 + MA排列）"
+
+# ------------------------------------------------------------
+# Video Agent 分组配置
+# 每组独立定时运行，分析结果分别保存（analysis_type = video_group_a 等）。
+# channels 为空列表时自动从 config.yaml bilibili.targets 读取全部 UP 主。
+# ------------------------------------------------------------
+video_groups:
+  group_a:
+    enabled: true
+    name: "每日博主观点"
+    schedule: "0 17 * * 1-5"        # 工作日 17:00
+    channels: []                     # [] = 使用 config.yaml bilibili.targets 全部
+    expire_hours: 20
+    prompt_hint: "重点提取当日板块热点和资金流向判断"
+    description: "每日财经UP主视频观点汇总"
+
+  group_b:
+    enabled: true
+    name: "周度复盘"
+    schedule: "0 19 * * 0"          # 每周日 19:00
+    channels: []
+    expire_hours: 168                # 7天
+    prompt_hint: "聚焦本周行业板块轮动逻辑和下周预判"
+    description: "周度市场复盘与下周展望"
+
+  group_c:
+    enabled: true
+    name: "月度策略"
+    schedule: "0 20 28 * *"         # 每月28日 20:00（近似月末）
+    channels: []
+    expire_hours: 720                # 30天
+    prompt_hint: "提炼月度行业配置主线和季度展望"
+    description: "月度行业配置策略"
+
+# ------------------------------------------------------------
+# run-all 汇总任务（检查各 Agent freshness，生成决策报告）
+# ------------------------------------------------------------
+run_all:
+  enabled: true
+  schedule: "0 18 * * 1-5"          # 工作日 18:00
+  force_rerun_agents: []             # 强制重新运行的 Agent（即使结果仍有效）
+  description: "检查所有 Agent 结果新鲜度，生成综合决策日报"

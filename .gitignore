@@ -1,0 +1,72 @@
+# ======================================
+# 行业板块 AI 研究平台 - .gitignore
+# ======================================
+
+# ---- 敏感配置（含 API Key / 数据库密码 / Cookie）----
+config/config.yaml
+# 使用 config.example.yaml 作为模板，复制后填入真实值
+
+
+# ---- Python 编译缓存 ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+.env
+ENV/
+
+
+# ---- 运行时生成数据 ----
+data/
+# 包括：音频、转录文本、热力图、分析报告、数据库缓存等
+
+
+# ---- 日志文件 ----
+*.log
+
+
+# ---- 临时脚本（以 _ 开头的一次性工具脚本）----
+_*.py
+_*.txt
+_*.json
+
+
+# ---- 第三方源码包（已通过 pip 安装，无需纳入版本控制）----
+faster-whisper-master/
+
+
+# ---- 压缩包（参考资料）----
+*.zip
+
+
+# ---- 编辑器 / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+
+# ---- 测试 / 覆盖率 ----
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+*.ipynb
+
+
+# ---- Docker 数据卷（本地挂载）----
+pgdata/

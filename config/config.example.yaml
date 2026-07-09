@@ -1,0 +1,234 @@
+# ===================================================
+# 行业板块 AI 研究平台 - 配置模板
+#
+# 使用方式：
+#   cp config.example.yaml config.yaml
+#   然后将所有 YOUR_xxx 占位符替换为真实值
+# ===================================================
+
+# B 站目标 UP 主配置（填写分析股票板块的 UP 主 UID）
+bilibili:
+  up_hosts:
+    - uid: "YOUR_UID_1"
+      name: "UP主名称1"
+      max_videos: 1
+    - uid: "YOUR_UID_2"
+      name: "UP主名称2"
+      max_videos: 1
+  days_filter: 1           # 只处理 N 天内发布的视频（0=不过滤）
+  request_interval: 2      # 请求间隔（秒）
+
+  # B 站登录 Cookie（浏览器 F12 → Application → Cookies → bilibili.com）
+  sessdata: "YOUR_SESSDATA"    # 必填
+  bili_jct: "YOUR_BILI_JCT"   # 建议填
+  dedeuserid: "YOUR_USER_ID"  # 建议填（纯数字）
+
+# 下载配置
+download:
+  audio_dir: "data/audio"
+  audio_quality: 0          # 0=最佳
+  audio_format: "mp3"
+  max_retries: 3
+  timeout: 120
+  cookies_file: ""          # 可选：cookies.txt（Netscape 格式）
+
+# 语音转文字配置（faster-whisper）
+transcription:
+  model_size: "medium"      # tiny/base/small/medium/large-v2/large-v3
+  device: "cpu"             # cpu / cuda
+  compute_type: "int8"      # int8（CPU）/ float16（GPU）
+  language: "zh"
+  vad_filter: true
+  transcript_dir: "data/transcripts"
+
+# LLM 配置
+# ===========================================================================
+# LLM 大语言模型配置（摘要/分析/决策）
+# 与下方 Embedding 模型完全独立，分别配置不同的接入点
+# ===========================================================================
+llm:
+  # 当前启用的 provider：ark / openai
+  provider: "ark"
+
+  # ---- 火山引擎方舟（Ark）大语言模型 ----
+  # 控制台（推理接入点）：https://console.volcengine.com/ark/region:ark+cn-beijing/endpoint
+  # ⚠️  此处填写【语言模型】接入点，如 doubao-pro-32k / doubao-1-5-pro-32k
+  ark:
+    api_key:  "YOUR_ARK_API_KEY"
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+    model:    "YOUR_LLM_ENDPOINT_ID"        # 例：ep-xxxxxxxx-xxxxx 或 doubao-pro-32k
+
+  # ---- 或切换到 OpenAI 兼容接口（DeepSeek / Qwen 等）----
+  # openai:
+  #   api_key:  "sk-YOUR_KEY"
+  #   base_url: "https://api.deepseek.com/v1"
+  #   model:    "deepseek-chat"
+
+  max_tokens:  4096
+  temperature: 0.3
+  timeout:     120
+
+# ===========================================================================
+# Embedding 向量模型配置（语义去重/历史检索/行业匹配）
+# ⚠️  与上方 LLM 完全独立，必须在控制台单独创建 Embedding 接入点后填写
+# ===========================================================================
+embedding:
+  # 当前启用的 provider：ark / openai
+  provider: "ark"
+
+  # ---- 火山引擎方舟（Ark）Embedding 模型 ----
+  # 控制台（推理接入点）：https://console.volcengine.com/ark/region:ark+cn-beijing/endpoint
+  # ⚠️  此处填写【Embedding 专用】接入点，与 llm.ark.model 不同
+  # 推荐：doubao-embedding-large（2048维）/ doubao-embedding（1024维）
+  ark:
+    api_key:    "YOUR_ARK_API_KEY"           # 可与 LLM 共用同一 API Key
+    base_url:   "https://ark.cn-beijing.volces.com/api/v3"
+    model:      "YOUR_EMBEDDING_ENDPOINT_ID" # 例：ep-yyyyyyyy-yyyyy（不同于 LLM 接入点）
+    dimensions:                              # 可选：doubao-embedding-large 填 2048
+
+  # ---- 或使用 OpenAI 兼容接口 ----
+  # openai:
+  #   api_key:    "sk-YOUR_KEY"
+  #   base_url:   "https://api.openai.com/v1"
+  #   model:      "text-embedding-3-small"   # 或 text-embedding-ada-002
+  #   dimensions: 1536
+
+# 报告生成配置
+report:
+  output_dir: "data/reports"
+  title_prefix: "A股板块行情日报"
+  generate_html: false
+
+# 状态数据库（pipeline 视频处理状态，SQLite）
+database:
+  path: "data/cache/state.db"
+
+# 日志配置
+logging:
+  level: "INFO"    # DEBUG / INFO / WARNING / ERROR
+  log_file: "data/cache/run.log"
+
+# ===================================================
+# 板块热度雷达
+# ===================================================
+sector_heat:
+
+  # PostgreSQL 数据库连接
+  database:
+    host: "127.0.0.1"
+    port: 5432
+    name: "dailysm"
+    user: "postgres"
+    password: "YOUR_PG_PASSWORD"
+    pool_size: 5
+    max_overflow: 10
+
+  # 数据采集配置
+  collector:
+    source: "akshare"
+    request_interval: 1.5
+    max_retries: 3
+    board_type: "em"
+
+  # 热度指数计算权重（合计须为 1.0）
+  heat_index:
+    weights:
+      price_change_pct:    0.15
+      main_net_inflow_pct: 0.18
+      limit_up_ratio:      0.12
+      rise_ratio:          0.05
+      continuous_capital:  0.25
+      continuous_leader:   0.25
+    normalization: "percentile"
+
+  # 热度计算引擎
+  heat_engine:
+    mode: auto    # auto / capital / history
+    history:
+      volume_ma_period: 20
+      volume_percentile_period: 120
+      rise_period: 10
+      max_consecutive_days: 10
+
+  # 连续得分（指数衰减记忆模型）
+  continuous_score:
+    decay_factor: 0.85
+    capital_threshold: 30
+    leader_threshold:  30
+    max_score: 1000.0
+    capital_weights:
+      main_net_inflow_pct: 1.0
+    leader_weights:
+      price_change_pct: 0.40
+      limit_up_ratio:   0.35
+      rise_ratio:       0.25
+
+  sort_score:
+    decay_factor: 0.95
+
+  visualizer:
+    lookback_days: 60
+    output_dir: "data/heatmaps"
+    dpi: 150
+    sort_by: "latest_heat"
+    colormap: "red_blue"
+
+  logging:
+    level: "INFO"
+    log_file: "data/cache/sector_heat.log"
+
+# ===================================================
+# 多 Agent 平台配置
+# ===================================================
+
+agents:
+  heat:
+    enabled: true
+    weight: 1.2
+  macro:
+    enabled: true
+    weight: 1.0
+  news:
+    enabled: true
+    weight: 0.9
+    categories: [finance, news]
+  video:
+    enabled: true
+    weight: 0.8
+    run_pipeline: false
+  quant:
+    enabled: false
+
+decision_agent:
+  top_n: 10
+  save_report: true
+
+macro_agent:
+  skip_nbs: false
+  nbs_timeout: 15
+  nbs_interval: 0.5
+
+# ===================================================
+# 通知中心（可选）
+# ===================================================
+notifications:
+  enabled: false    # 改为 true 并填写 Webhook 后生效
+
+  on_daily_report:    true
+  on_agent_complete:  false
+  on_agent_error:     true
+  on_scheduler_error: true
+
+  channels:
+    dingtalk:
+      enabled: false
+      webhook: ""    # https://oapi.dingtalk.com/robot/send?access_token=xxx
+      secret: ""     # 加签秘钥（可选）
+
+    feishu:
+      enabled: false
+      webhook: ""    # https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+
+    wecom:
+      enabled: false
+      webhook: ""    # https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx

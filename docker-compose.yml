@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dailysm-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "1"
+      POSTGRES_DB: dailysm
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - dailysm_pgdata:/var/lib/postgresql/data
+
+volumes:
+  dailysm_pgdata:
+    name: dailysm_pgdata
