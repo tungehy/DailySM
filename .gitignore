@@ -63,6 +63,13 @@ dist/
 build/
 
 
+# ---- 前端（web/）----
+node_modules/
+web/node_modules/
+web/dist/
+web/*.local
+
+
 # ---- Jupyter ----
 .ipynb_checkpoints/
 *.ipynb

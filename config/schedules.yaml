@@ -72,6 +72,12 @@ agents:
     expire_hours: 20
     description: "量化分析（趋势动量 + 放量 + 相对强弱 + MA排列）"
 
+  research:
+    enabled: false                   # 数据源待接入，暂不启用（预留接口）
+    schedule: "0 8 * * 1-5"         # 工作日 08:00（研报晨会时段）
+    expire_hours: 168                # 研报观点时效长，7天有效
+    description: "券商研报/机构策略观点（→ 统一市场观点库 market_opinions）"
+
 # ------------------------------------------------------------
 # Video Agent 分组配置
 # 每组独立定时运行，分析结果分别保存（analysis_type = video_group_a 等）。

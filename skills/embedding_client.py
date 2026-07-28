@@ -60,20 +60,27 @@ class EmbeddingClient:
         cfg      = cfg or _load_embed_cfg()
         provider = cfg.get("provider", "ark")
 
-        from openai import OpenAI
-
         if provider == "openai":
             sub = cfg.get("openai", {})
         else:
             sub = cfg.get("ark", {})
 
-        self._client     = OpenAI(
-            api_key  = sub.get("api_key", "sk-placeholder"),
-            base_url = sub.get("base_url", "https://api.openai.com/v1"),
-        )
+        # api_type: text（标准 /embeddings，OpenAI 兼容）| multimodal（豆包 vision 专用端点）
+        self._api_type   = str(sub.get("api_type", "text")).lower()
+        self._api_key    = sub.get("api_key", "sk-placeholder")
+        self._base_url   = sub.get("base_url", "https://api.openai.com/v1")
         self._model      = sub.get("model", "text-embedding-3-small")
         self._dimensions = sub.get("dimensions")   # None 表示不传（使用模型默认）
-        logger.debug("EmbeddingClient 初始化：provider=%s  model=%s", provider, self._model)
+
+        if self._api_type == "multimodal":
+            # 多模态端点用 httpx 直连，不走 OpenAI SDK（SDK 会错误追加 /embeddings）
+            self._client = None
+        else:
+            from openai import OpenAI
+            self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+
+        logger.debug("EmbeddingClient 初始化：provider=%s  api_type=%s  model=%s",
+                     provider, self._api_type, self._model)
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -186,6 +193,8 @@ class EmbeddingClient:
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         """调用 API，获取一批文本的向量"""
+        if self._api_type == "multimodal":
+            return [self._embed_one_multimodal(t) for t in texts]
         try:
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -200,6 +209,40 @@ class EmbeddingClient:
         except Exception as e:
             logger.error("Embedding API 调用失败: %s", e)
             return [[] for _ in texts]
+
+    def _embed_one_multimodal(self, text: str) -> list[float]:
+        """
+        调用豆包多模态 embedding 端点（doubao-embedding-vision）。
+        端点：{base_url}（应为 .../api/v3/embeddings/multimodal），一次一条文本。
+        请求：{"model":..., "input":[{"type":"text","text":...}]}
+        响应：data 为对象 {"embedding":[...]}（或 list，兼容处理）。
+        """
+        import httpx
+        try:
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "input": [{"type": "text", "text": text}],
+            }
+            resp = httpx.post(
+                self._base_url,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data")
+            if isinstance(data, dict):
+                return data.get("embedding", []) or []
+            if isinstance(data, list) and data:
+                return data[0].get("embedding", []) or []
+            logger.error("多模态 embedding 响应格式异常: %s", str(data)[:200])
+            return []
+        except Exception as e:
+            logger.error("多模态 Embedding API 调用失败: %s", e)
+            return []
 
 
 # ---------------------------------------------------------------------------

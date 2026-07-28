@@ -77,10 +77,13 @@ class LLMClient:
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
         temperature: float | None = None,
+        include_reasoning: bool = True,
     ) -> str:
         """
         调用 LLM，返回文字响应。
-        对于推理模型，同时返回推理过程（供展示用）。
+
+        include_reasoning=True（默认）：推理模型会在正文前附带【推理过程】。
+        include_reasoning=False：只返回最终答案（对话场景推荐，避免展示思考过程）。
         """
         try:
             resp = self._client.chat.completions.create(
@@ -92,7 +95,7 @@ class LLMClient:
             )
             msg    = resp.choices[0].message
             result = ""
-            if hasattr(msg, "reasoning_content") and msg.reasoning_content:
+            if include_reasoning and hasattr(msg, "reasoning_content") and msg.reasoning_content:
                 result += f"【推理过程】\n{msg.reasoning_content}\n\n"
             result += (msg.content or "")
             return result.strip() or "（空响应）"

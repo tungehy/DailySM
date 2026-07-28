@@ -198,6 +198,32 @@ agents:
     run_pipeline: false
   quant:
     enabled: false
+  research:
+    enabled: false    # 研报模块：需手动 import 研报后启用
+    weight: 1.1
+
+# ---- 研报 RAG 知识库配置 ----
+# 时效加权 RAG：最终得分 = 语义相似度 × 时间衰减（0.5^(天数/半衰期)）
+# 研报手动导入：python main.py research import <文件>（docx/pdf/md/json/txt）
+research:
+  chunk_size: 500
+  chunk_overlap: 80
+  top_k: 6
+  drop_threshold: 0.15   # 时间衰减低于此值视为过期丢弃
+  expire_hours: 168
+  focus_industries: []   # [] = 自动取库中仍新鲜的行业
+  half_life_days:        # 各类型研报半衰期（天）
+    macro_strategy: 180
+    industry_deep:  90
+    company_note:   30
+    data_flash:     7
+    default:        60
+
+# ---- 对话决策 Agent 配置 ----
+chat_agent:
+  news_min: 3         # 当日相关新闻少于此值时触发实时全网补采
+  history_turns: 4    # 融合生成时携带的最近对话轮数
+  research_top_k: 3
 
 decision_agent:
   top_n: 10

@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-ink-50 text-ink-900 antialiased;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { @apply bg-ink-300 rounded-full; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 卡片 */
+.card {
+  @apply bg-white rounded-xl border border-ink-200 shadow-sm;
+}
+
+/* markdown 简要样式 */
+.md-body { @apply text-sm leading-6 text-ink-800; }
+.md-body h1, .md-body h2, .md-body h3 { @apply font-semibold text-ink-900 mt-4 mb-2; }
+.md-body h1 { @apply text-lg; }
+.md-body h2 { @apply text-base; }
+.md-body p { @apply my-2; }
+.md-body ul { @apply list-disc pl-5 my-2 space-y-1; }
+.md-body ol { @apply list-decimal pl-5 my-2 space-y-1; }
+.md-body strong { @apply font-semibold text-ink-900; }

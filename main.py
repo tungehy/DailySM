@@ -38,6 +38,15 @@ _LOG_DIR      = _PROJECT_ROOT / "data" / "cache"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _force_utf8_stdout() -> None:
+    """Windows 控制台默认 GBK，强制 stdout/stderr 用 UTF-8，避免 ✓ 等字符崩溃"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def _setup_logging(level: str = "INFO") -> None:
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(
@@ -51,6 +60,7 @@ def _setup_logging(level: str = "INFO") -> None:
     )
 
 
+_force_utf8_stdout()
 _setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -86,6 +96,7 @@ def cmd_run_all(args) -> bool:
     from agents.news_agent     import NewsAgent
     from agents.video_agent    import VideoAgent
     from agents.quant_agent    import QuantAgent
+    from agents.research_agent import ResearchAgent
     from agents.decision_agent import DecisionAgent
     from skills.analysis_repo  import init_analysis_table, load_latest_as_result
 
@@ -109,12 +120,14 @@ def cmd_run_all(args) -> bool:
         engine = None
 
     # 构建 Agent 列表（video 使用 group_a 作为 run-all 时的默认分组）
+    # research 已接入统一观点库，但数据源待接入（is_available()=False，默认自动跳过）
     all_agents = {
-        "heat":  HeatAgent(),
-        "macro": MacroAgent(skip_nbs=getattr(args, "skip_nbs", False)),
-        "news":  NewsAgent(),
-        "video": VideoAgent(group="group_a", run_pipeline=getattr(args, "run_pipeline", False)),
-        "quant": QuantAgent(),
+        "heat":     HeatAgent(),
+        "macro":    MacroAgent(skip_nbs=getattr(args, "skip_nbs", False)),
+        "news":     NewsAgent(),
+        "video":    VideoAgent(group="group_a", run_pipeline=getattr(args, "run_pipeline", False)),
+        "quant":    QuantAgent(),
+        "research": ResearchAgent(),
     }
 
     agents_to_run = [(name, agent) for name, agent in all_agents.items() if name in enabled]
@@ -448,6 +461,243 @@ def cmd_schedule(args) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 子命令：research（研报 RAG 知识库）
+# ---------------------------------------------------------------------------
+
+def cmd_research(args) -> bool:
+    """研报知识库：导入 / 检索 / 列表 / 运行分析"""
+    from sector_heat.db import get_engine
+    from skills.research_db import init_research_tables
+
+    sub_cmd = getattr(args, "research_cmd", None)
+    engine  = get_engine()
+    init_research_tables(engine)
+
+    # ---- import ----
+    if sub_cmd == "import":
+        from pathlib import Path
+        from skills.doc_parser import parse_file
+        from skills.research_db import insert_report, count_reports
+        from skills.embedding_client import EmbeddingClient
+
+        p = Path(args.path)
+        if not p.exists():
+            logger.error("[research] 路径不存在: %s", p)
+            return False
+
+        # 收集待导入文件（单文件或目录批量）
+        exts = {".docx", ".pdf", ".md", ".markdown", ".json", ".txt", ".text"}
+        files = (
+            [f for f in sorted(p.iterdir()) if f.suffix.lower() in exts]
+            if p.is_dir() else [p]
+        )
+        if not files:
+            logger.warning("[research] 未找到可导入文件（支持 %s）", "/".join(sorted(exts)))
+            return False
+
+        overrides = {
+            "report_type": args.report_type,
+            "institution": args.institution,
+            "analyst":     args.analyst,
+            "publish_time": args.pub_date,
+        }
+        if args.industries:
+            overrides["industries"] = [
+                x.strip() for x in args.industries.replace("，", ",").split(",") if x.strip()
+            ]
+        overrides = {k: v for k, v in overrides.items() if v}
+
+        embed = EmbeddingClient()
+        ok, skip = 0, 0
+        for f in files:
+            try:
+                parsed = parse_file(f)
+                # CLI 显式参数优先覆盖文件内元数据（仅当文件内缺失或用户强制）
+                for k, v in overrides.items():
+                    if v and not parsed.get(k):
+                        parsed[k] = v
+                res = insert_report(engine, embed, parsed)
+                if res["skipped"]:
+                    skip += 1
+                    print(f"  ⊘ 已存在跳过: {f.name}")
+                else:
+                    ok += 1
+                    print(f"  ✓ 导入成功: {f.name}（{res['chunks']} 块，id={res['report_id']}）")
+            except Exception as e:
+                logger.error("[research] 导入失败 %s: %s", f.name, e)
+
+        stat = count_reports(engine)
+        print(f"\n导入完成：成功 {ok}，跳过 {skip}。"
+              f"知识库现有 {stat['reports']} 篇研报 / {stat['chunks']} 块。")
+        return ok > 0 or skip > 0
+
+    # ---- list ----
+    if sub_cmd == "list":
+        from skills.research_db import list_reports, count_reports
+        reports = list_reports(engine)
+        stat = count_reports(engine)
+        print(f"\n{'='*70}\n研报知识库（{stat['reports']} 篇 / {stat['chunks']} 块）\n{'='*70}")
+        if not reports:
+            print("  （空，请用 python main.py research import <文件> 导入）")
+            return True
+        for r in reports:
+            inds = "、".join(r.get("industries") or []) or "-"
+            pub  = r["publish_time"].strftime("%Y-%m-%d") if r.get("publish_time") else "?"
+            print(f"  [{r['id']:>3}] {pub} | {r.get('report_type') or '未分类':14} "
+                  f"| {(r.get('institution') or '-'):8} | {inds}")
+            print(f"        {r['title'][:60]}（{r['chunk_count']} 块）")
+        print(f"{'='*70}\n")
+        return True
+
+    # ---- search ----
+    if sub_cmd == "search":
+        from skills.research_db import search
+        from skills.embedding_client import EmbeddingClient
+        embed = EmbeddingClient()
+        hits = search(engine, embed, args.query,
+                      top_k=args.top_k, industry=args.industry,
+                      drop_threshold=0.0)   # 检索测试不丢弃，展示衰减
+        print(f"\n检索：「{args.query}」" + (f"（行业={args.industry}）" if args.industry else ""))
+        print(f"{'='*70}")
+        if not hits:
+            print("  无匹配结果（知识库为空？）")
+            return True
+        for i, h in enumerate(hits):
+            print(f"\n#{i+1}  综合分={h['score']:.3f}  "
+                  f"(相似度={h['similarity']:.3f} × 时效={h['decay']:.3f})")
+            print(f"    来源: {h.get('institution') or '-'} | {h.get('report_title') or '-'}")
+            print(f"    {h['content'][:150]}…")
+        print(f"\n{'='*70}\n")
+        return True
+
+    # ---- run ----
+    if sub_cmd == "run":
+        from agents.research_agent import ResearchAgent
+        target = date.fromisoformat(args.date) if args.date else date.today()
+        agent  = ResearchAgent()
+        if not agent.is_available():
+            logger.warning("[research] 知识库无新鲜研报，请先 import")
+            return False
+        result = agent.analyze(target)
+        print("\n" + result.summary + "\n")
+        return result.confidence > 0
+
+    logger.error("[research] 未知子命令: %s", sub_cmd)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# 子命令：chat（交互式对话决策 Agent）
+# ---------------------------------------------------------------------------
+
+def cmd_chat(args) -> bool:
+    """交互式对话决策：意图理解 → 按需补数据 → 融合持仓给出个性化建议"""
+    from agents.chat_agent import ChatAgent
+    from sector_heat.db import init_db
+
+    init_db()   # 确保 user_portfolio / chat_history 等表存在
+    agent = ChatAgent()
+
+    # 单次提问模式
+    ask = getattr(args, "ask", None)
+    if ask:
+        print("\n" + agent.chat(ask) + "\n")
+        return True
+
+    # 交互式 REPL
+    print("=" * 60)
+    print("  A股行业对话决策助手（输入 exit / quit 退出）")
+    print("  会自动结合：实时新闻 + 各Agent分析 + 统一观点库 + 你的持仓")
+    print("=" * 60)
+    while True:
+        try:
+            user_input = input("\n你 > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n再见。")
+            break
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "退出", "q"):
+            print("再见。")
+            break
+        print("\n助手 > 思考中…")
+        answer = agent.chat(user_input)
+        print("\n助手 > " + answer)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 子命令：portfolio（持仓管理）
+# ---------------------------------------------------------------------------
+
+def cmd_portfolio(args) -> bool:
+    """用户持仓管理：list / add / remove / clear"""
+    from sector_heat.db import get_engine
+    from skills.portfolio_db import (
+        init_portfolio_table, get_holdings, upsert_holding,
+        delete_holding, clear_holdings, format_holdings,
+    )
+    engine = get_engine()
+    init_portfolio_table(engine)
+
+    sub_cmd = getattr(args, "portfolio_cmd", None) or "list"
+
+    if sub_cmd == "list":
+        holdings = get_holdings(engine)
+        print("\n=== 当前持仓 ===")
+        print(format_holdings(holdings))
+        print()
+        return True
+
+    if sub_cmd == "add":
+        upsert_holding(engine, {
+            "name":         args.name,
+            "holding_type": args.type,
+            "position_pct": args.position,
+            "cost_price":   args.cost,
+            "shares":       args.shares,
+            "note":         args.note,
+        })
+        print(f"已记录/更新持仓：{args.name}")
+        return True
+
+    if sub_cmd == "remove":
+        n = delete_holding(engine, args.name)
+        print(f"已删除 {n} 条持仓：{args.name}")
+        return n > 0
+
+    if sub_cmd == "clear":
+        n = clear_holdings(engine)
+        print(f"已清空 {n} 条持仓")
+        return True
+
+    logger.error("[portfolio] 未知子命令: %s", sub_cmd)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# 子命令：serve（Web 服务：前端 + API）
+# ---------------------------------------------------------------------------
+
+def cmd_serve(args) -> bool:
+    """启动 FastAPI：托管构建后的前端（web/dist）+ /api 数据接口"""
+    import uvicorn
+    from pathlib import Path
+    dist = Path(__file__).resolve().parent / "web" / "dist"
+    if not dist.exists():
+        logger.warning("前端未构建：%s 不存在。先执行 `cd web && npm run build`，"
+                       "或开发时单独运行 `cd web && npm run dev`。", dist)
+    logger.info("启动 Web 服务: http://%s:%d", args.host, args.port)
+    uvicorn.run(
+        "api.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 
@@ -510,8 +760,59 @@ def build_parser() -> argparse.ArgumentParser:
 
     idx_sub.add_parser("list", help="列出支持的指数")
 
+    # --- research（研报 RAG 知识库）---
+    p_res = sub.add_parser("research", help="研报 RAG 知识库（导入/检索/分析）")
+    res_sub = p_res.add_subparsers(dest="research_cmd", required=True)
+
+    res_imp = res_sub.add_parser("import", help="手动导入研报（docx/pdf/md/json/txt）")
+    res_imp.add_argument("path", help="研报文件路径，或目录（批量导入）")
+    res_imp.add_argument("--type", dest="report_type", default=None,
+                         help="报告类型：macro_strategy/industry_deep/company_note/data_flash")
+    res_imp.add_argument("--institution", default=None, help="机构/券商")
+    res_imp.add_argument("--analyst",     default=None, help="分析师")
+    res_imp.add_argument("--date",        dest="pub_date", default=None,
+                         help="发布日期 YYYY-MM-DD（默认取文件内或今日）")
+    res_imp.add_argument("--industries",  default=None,
+                         help="涉及行业，逗号分隔，如 半导体,医药生物")
+
+    res_search = res_sub.add_parser("search", help="时效加权检索测试")
+    res_search.add_argument("query", help="检索问题")
+    res_search.add_argument("--industry", default=None, help="限定行业")
+    res_search.add_argument("--top-k",    dest="top_k", type=int, default=6)
+
+    res_run = res_sub.add_parser("run", help="运行研报 Agent（抽取观点入库）")
+    res_run.add_argument("date", nargs="?", default=None, help="日期 YYYY-MM-DD（默认今日）")
+
+    res_sub.add_parser("list", help="列出已导入研报")
+
+    # --- chat（交互式对话决策）---
+    p_chat = sub.add_parser("chat", help="交互式对话决策助手（自动补数据+融合持仓）")
+    p_chat.add_argument("--ask", default=None, help="单次提问（不进入交互模式）")
+
+    # --- portfolio（持仓管理）---
+    p_pf = sub.add_parser("portfolio", help="用户持仓管理")
+    pf_sub = p_pf.add_subparsers(dest="portfolio_cmd", required=False)
+    pf_sub.default = "list"
+    pf_sub.add_parser("list", help="查看当前持仓")
+    pf_add = pf_sub.add_parser("add", help="添加/更新持仓")
+    pf_add.add_argument("name", help="标的名，如 半导体 / 贵州茅台")
+    pf_add.add_argument("--type", default="sector", help="sector/stock/etf/theme")
+    pf_add.add_argument("--position", type=float, default=None, help="仓位占比 %%")
+    pf_add.add_argument("--cost",     type=float, default=None, help="成本价")
+    pf_add.add_argument("--shares",   type=float, default=None, help="持股数")
+    pf_add.add_argument("--note",     default=None, help="备注")
+    pf_rm = pf_sub.add_parser("remove", help="删除持仓")
+    pf_rm.add_argument("name", help="标的名")
+    pf_sub.add_parser("clear", help="清空全部持仓")
+
     # --- notify-test ---
     sub.add_parser("notify-test", help="向所有已启用渠道发送测试消息，验证 Webhook 配置")
+
+    # --- serve（前端 + API）---
+    p_serve = sub.add_parser("serve", help="启动 Web 服务（托管前端 + /api）")
+    p_serve.add_argument("--host", default="127.0.0.1", help="监听地址")
+    p_serve.add_argument("--port", type=int, default=8000, help="监听端口")
+    p_serve.add_argument("--reload", action="store_true", help="开发模式（热重载）")
 
     return parser
 
@@ -532,6 +833,10 @@ def main():
         "schedule":    cmd_schedule,
         "notify-test": cmd_notify_test,
         "index":       cmd_index,
+        "research":    cmd_research,
+        "chat":        cmd_chat,
+        "portfolio":   cmd_portfolio,
+        "serve":       cmd_serve,
     }
     handler = dispatch.get(args.command)
     if handler is None:
