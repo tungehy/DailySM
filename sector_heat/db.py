@@ -133,13 +133,20 @@ def init_db():
     覆盖范围（Feature Layer）：
       sector_heat_index      — 板块热度指数
       sector_quant_index     — 量化模型得分
-      news_industry_mapping  — 新闻行业映射
+      news_industry_mapping  — 新闻行业映射（旧表，已由 market_opinions 替代，保留历史）
+
+    覆盖范围（Opinion Layer）：
+      market_opinions        — 统一市场观点库（视频/研报/新闻/社交外部观点）
+      research_reports       — 研报原文 + 元数据（RAG Raw 层）
+      research_chunks        — 研报切块 + 向量（RAG Vector 层，时效加权检索）
 
     覆盖范围（Analysis Layer）：
       analysis_results       — Agent 分析结果仓库
 
     其他：
       market_index_daily     — 市场指数日线（上证/深证/创业板/科创50/恒生/恒生科技）
+      user_portfolio         — 用户持仓（对话决策 Agent）
+      chat_history           — 对话历史（对话决策 Agent）
     """
     engine = get_engine()
 
@@ -169,8 +176,23 @@ def init_db():
     except Exception as e:
         logger.warning("init_quant_table 失败: %s", e)
 
+    # ── Opinion Layer ─────────────────────────────────────────────────
+    # 5. 统一市场观点库（视频/研报/新闻/社交观点统一归宿）
+    try:
+        from skills.market_opinion_db import init_market_opinion_table
+        init_market_opinion_table(engine)
+    except Exception as e:
+        logger.warning("init_market_opinion_table 失败: %s", e)
+
+    # 5.1 研报 RAG 知识库（原文 + 向量切块，时效加权检索）
+    try:
+        from skills.research_db import init_research_tables
+        init_research_tables(engine)
+    except Exception as e:
+        logger.warning("init_research_tables 失败: %s", e)
+
     # ── Analysis Layer ────────────────────────────────────────────────
-    # 5. Agent 分析结果仓库
+    # 6. Agent 分析结果仓库
     try:
         from skills.analysis_repo import init_analysis_table
         init_analysis_table(engine)
@@ -178,12 +200,29 @@ def init_db():
         logger.warning("init_analysis_table 失败: %s", e)
 
     # ── 其他 ──────────────────────────────────────────────────────────
-    # 6. 市场指数日线
+    # 7. 市场指数日线
     try:
         from skills.index_db import init_index_table
         init_index_table(engine)
     except Exception as e:
         logger.warning("init_index_table 失败: %s", e)
+
+    # 8. 用户持仓 + 对话历史（对话决策 Agent）
+    try:
+        from skills.portfolio_db import init_portfolio_table
+        init_portfolio_table(engine)
+    except Exception as e:
+        logger.warning("init_portfolio_table 失败: %s", e)
+    try:
+        from skills.chat_db import init_chat_table
+        init_chat_table(engine)
+    except Exception as e:
+        logger.warning("init_chat_table 失败: %s", e)
+    try:
+        from skills.watchlist_db import init_watchlist_table
+        init_watchlist_table(engine)
+    except Exception as e:
+        logger.warning("init_watchlist_table 失败: %s", e)
 
     logger.info("数据库表初始化完成（所有表）")
 

@@ -5,6 +5,8 @@
   - 支持多个独立 Task Group（group_a / group_b / group_c），各组有独立的
     调度时间、UP 主列表、Prompt 提示和有效期。
   - 每组分析完成后自动保存到 analysis_results（analysis_type = video_group_a 等）。
+  - 提取到的板块观点统一写入 market_opinions（source_type=video），
+    分组对应观点时效：group_a=short / group_b=mid / group_c=long。
   - analyze() 先检查 analysis_results 是否有效缓存；若有效则直接返回，不重复分析。
   - run-all 不再触发视频 pipeline，改为直接读取最新有效分析结果。
 
@@ -160,6 +162,9 @@ class VideoAgent(BaseAgent):
         # 3. LLM 提取板块观点
         sector_view = self._extract_sectors(report_text)
         top_sectors = self._build_top_sectors(sector_view)
+
+        # 3.5 写入统一市场观点库（source_type=video）
+        self._save_opinions(engine, trade_date, sector_view, source)
 
         # 4. 摘要
         gcfg       = _load_group_config(self.group)
@@ -350,3 +355,90 @@ class VideoAgent(BaseAgent):
                 "reason":    item.get("reason", ""),
             })
         return results
+
+    # ------------------------------------------------------------------
+    # 统一市场观点库写入
+    # ------------------------------------------------------------------
+
+    # Task Group → 观点时效（group_a 日更=short，group_b 周更=mid，group_c 月更=long）
+    _GROUP_HORIZON = {"group_a": "short", "group_b": "mid", "group_c": "long"}
+
+    def _save_opinions(
+        self,
+        engine,
+        trade_date: date,
+        sector_view: dict,
+        source: str,
+    ) -> None:
+        """把提取到的板块观点写入 market_opinions（source_type=video）"""
+        try:
+            from skills.market_opinion_db import (
+                init_market_opinion_table, insert_opinions,
+            )
+        except Exception as e:
+            logger.warning("[VideoAgent/%s] market_opinion_db 不可用: %s", self.group, e)
+            return
+
+        gcfg       = _load_group_config(self.group)
+        group_name = gcfg.get("name", self.group)
+        horizon    = self._GROUP_HORIZON.get(self.group, "short")
+        td         = str(trade_date)
+
+        opinions: list[dict] = []
+        for item in sector_view.get("bullish_sectors", []):
+            sector = str(item.get("sector", "")).strip()
+            if not sector:
+                continue
+            conf = float(item.get("confidence", 0.6))
+            opinions.append({
+                "source_type":  "video",
+                "source_name":  group_name,
+                "author":       item.get("author"),
+                "raw_ref":      f"{self.group}:{td}",
+                "target_type":  "sector",
+                "target_name":  sector,
+                "direction":    "bullish",
+                "strength":     min(100.0, conf * 85 + 10),
+                "confidence":   conf,
+                "reason":       str(item.get("reason", ""))[:300],
+                "horizon":      horizon,
+                "publish_time": td,
+                "trade_date":   td,
+                "extra":        {"group": self.group, "source": source},
+            })
+        for item in sector_view.get("bearish_sectors", []):
+            sector = str(item.get("sector", "")).strip()
+            if not sector:
+                continue
+            conf = float(item.get("confidence", 0.6))
+            opinions.append({
+                "source_type":  "video",
+                "source_name":  group_name,
+                "author":       item.get("author"),
+                "raw_ref":      f"{self.group}:{td}",
+                "target_type":  "sector",
+                "target_name":  sector,
+                "direction":    "bearish",
+                "strength":     min(100.0, conf * 85 + 10),
+                "confidence":   conf,
+                "reason":       str(item.get("reason", ""))[:300],
+                "horizon":      horizon,
+                "publish_time": td,
+                "trade_date":   td,
+                "extra":        {"group": self.group, "source": source},
+            })
+
+        if not opinions:
+            return
+
+        try:
+            init_market_opinion_table(engine)
+            # 幂等：dedup_key 含分组+日期，同组同日重跑走 ON CONFLICT UPDATE，
+            # 不同分组（group_a/b/c）互不影响，故此处无需 delete。
+            insert_opinions(engine, opinions)
+            logger.info(
+                "[VideoAgent/%s] 写入市场观点库：%d 条（horizon=%s）",
+                self.group, len(opinions), horizon,
+            )
+        except Exception as e:
+            logger.warning("[VideoAgent/%s] 写入 market_opinions 失败: %s", self.group, e)

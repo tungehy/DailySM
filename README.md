@@ -28,6 +28,10 @@
 | **新闻舆情** | 爬取全网 22 个热点平台，LLM 映射至行业板块影响 |
 | **视频观点** | 下载 B 站财经 UP 主视频 → Whisper 转录 → LLM 板块提取 |
 | **投资决策** | 汇总所有 Agent 输出，加权聚合 + LLM 综合分析，生成 Markdown / JSON 日报 |
+| **AI 对话助手** | 交互式问答：意图理解 → 按需实时补数据 → 融合各 Agent 分析与用户持仓 → 个性化建议 |
+| **统一市场观点库** | 视频 / 研报 / 新闻观点统一入库（market_opinions），时效加权聚合 |
+| **研报 RAG** | 研报导入（docx/pdf/md/json/txt）→ 切块 Embedding → 时效加权检索 |
+| **Web 前端** | React 可视化界面：市场总览 / 研究中心 / 知识中心 / AI 助手 / 系统设置 |
 | **通知推送** | 支持钉钉 / 飞书 / 企业微信 Webhook 推送决策日报和告警 |
 | **定时调度** | APScheduler 守护进程，按预设 cron 自动运行各 Agent |
 
@@ -87,10 +91,14 @@ skills/
 | `sector_heat_index` | 板块热度指数（heat_score、continuous_score、sort_score） |
 | `sector_quant_index` | 量化模型得分（趋势动量、放量、相对强弱、趋势评分） |
 | `macro_nbs_data` | 国家统计局宏观指标（CPI/PPI/PMI/工业利润等，45+指标） |
+| `market_opinions` | **统一市场观点库**（视频/研报/新闻/社交外部观点，含时效管理） |
 | `analysis_results` | 各 Agent 分析结果仓库（支持缓存复用） |
 |`market_index_daily` | 大盘数据 |
-|`news_industry_mapping` | 消息面对板块影响的映射表 |
 |`news_raw` | 记录新闻消息源，新闻内容概括等信息 |
+|`news_industry_mapping` | 旧版新闻→板块映射表（已由 `market_opinions` 替代，保留历史数据） |
+| `research_reports` / `research_chunks` | 研报原文 + 向量切块（RAG 知识库，时效加权） |
+| `user_portfolio` / `chat_history` | 用户持仓 / 对话历史（AI 对话助手） |
+| `user_watchlist` | 自选关注（ETF / 行业 / 主题，首页展示） |
 ---
 
 ## 目录结构
@@ -111,10 +119,13 @@ DailySM/
 │   ├── news_agent.py       # 新闻舆情 Agent
 │   ├── video_agent.py      # 视频观点 Agent（Task Group）
 │   ├── quant_agent.py      # 量化分析 Agent
+│   ├── research_agent.py   # 研报观点 Agent（RAG）
+│   ├── chat_agent.py       # 对话决策 Agent（交互式助手）
 │   └── decision_agent.py   # 投资决策 Agent（总编排）
 │
 ├── skills/                 # Skill 层（可复用工具）
-│   ├── llm_client.py
+│   ├── llm_client.py       # 统一 LLM 客户端（Ark/DeepSeek/OpenAI）
+│   ├── embedding_client.py # Embedding 客户端（文本/多模态）
 │   ├── heat_skill.py
 │   ├── bilibili_skill.py
 │   ├── whisper_skill.py
@@ -122,8 +133,23 @@ DailySM/
 │   ├── news_crawler.py
 │   ├── quant_db.py
 │   ├── macro_db.py
-│   ├── analysis_repo.py
+│   ├── market_opinion_db.py# 统一市场观点库
+│   ├── research_db.py      # 研报 RAG（原文 + 向量切块）
+│   ├── doc_parser.py       # 研报多格式解析（docx/pdf/md/json/txt）
+│   ├── portfolio_db.py     # 用户持仓
+│   ├── chat_db.py          # 对话历史
+│   ├── watchlist_db.py     # 自选关注
+│   ├── analysis_repo.py    # Agent 结果仓库
 │   └── notification.py
+│
+├── api/                    # FastAPI 后端（为前端提供数据 API）
+│   ├── main.py             # 应用入口（托管前端 + /api）
+│   └── routers/            # dashboard / research / knowledge / assistant / system
+│
+├── web/                    # React 前端
+│   ├── src/pages/          # Dashboard / Research / Knowledge / Assistant / System
+│   ├── src/components/     # 布局、卡片、热力图、迷你折线、Markdown 等
+│   └── dist/               # 构建产物（python main.py serve 托管）
 │
 ├── sector_heat/            # 热度雷达核心模块
 │   ├── collector.py        # 数据采集（同花顺 THS）
@@ -334,6 +360,44 @@ python main.py notify-test
 - **决策日报**：`data/reports/YYYY-MM-DD-decision.md`
 - **JSON 数据**：`data/reports/YYYY-MM-DD-decision.json`
 - **运行日志**：`data/cache/run.log`
+
+---
+
+## Web 前端（可视化界面）
+
+围绕「市场 → 分析 → 决策 → 对话」四条主线组织的 React 可视化界面。
+
+### 页面
+
+| 页面 | 内容 |
+|---|---|
+| **首页 Dashboard** | 大盘指数卡片（含 20 日走势）、热门板块（热度/资金/20 日趋势）、超跌板块、今日 AI 投资决策日报、我的关注（自选板块） |
+| **研究中心 Research** | 30 天行业热点热力图、市场观点（视频/研报/新闻统一聚合）、宏观分析摘要、新闻情绪摘要 |
+| **知识中心 Knowledge** | 研报列表（导入/删除/Embedding 状态实时刷新）、RAG 时效加权检索、研报阅读器（AI 摘要 + 正文） |
+| **AI 助手 Assistant** | 类 ChatGPT 对话，自动结合实时新闻、各 Agent 分析、统一观点库与持仓，给出个性化建议 |
+| **系统设置 System** | Agent 运行状态、调度任务（schedules.yaml）、常用配置在线修改 |
+
+### 启动
+
+**生产模式**（构建前端 + FastAPI 托管，单一端口）：
+
+```bash
+cd web && npm install && npm run build   # 首次：构建前端
+cd .. && python main.py serve             # 启动服务
+# 打开 http://127.0.0.1:8000
+```
+
+**开发模式**（前端热重载 + 后端热重载，两个终端）：
+
+```bash
+# 终端 1：后端 API（http://127.0.0.1:8000）
+python main.py serve --reload
+
+# 终端 2：前端（http://localhost:5173，已配置 /api 代理）
+cd web && npm run dev
+```
+
+后端 API 位于 `api/`（FastAPI），前端位于 `web/`（React + Vite + TypeScript + Tailwind + Recharts）。
 
 ---
 

@@ -6,13 +6,14 @@
       ↓
   NewsAgent（本模块）
       ↓ 行业映射 LLM 分析
-  news_industry_mapping（Feature Layer）
+  market_opinions（Opinion Layer，source_type=news，统一市场观点库）
       ↓ 汇总生成今日舆情报告
   analysis_results（Analysis Layer）
       ↓ 将 news_raw 标为 completed
 
 设计原则：
   - Agent 不直接读取爬虫结果，统一读取 news_raw（Raw Layer）
+  - 行业观点统一写入 market_opinions（不再写 news_industry_mapping 旧表）
   - Skill 只负责采集/预处理/存储，不生成投资结论
   - 支持 Prompt 升级后对历史新闻重新分析（reset + re-run）
 """
@@ -42,7 +43,7 @@ class NewsAgent(BaseAgent):
     内部流程：
         1. 触发 NewsCrawler.fetch_and_store() 采集新闻（若当天无 pending）
         2. 读取 news_raw status=pending 数据
-        3. 批量行业映射 LLM 分析 → news_industry_mapping
+        3. 批量行业映射 LLM 分析 → market_opinions（source_type=news）
         4. 汇总生成 AgentResult → analysis_results
         5. 标记 news_raw status=completed
     """
@@ -96,12 +97,16 @@ class NewsAgent(BaseAgent):
         from sector_heat.db import get_engine
         from skills.news_db import (
             init_news_tables, get_pending_news, count_news_for_date,
-            delete_mappings_for_date, insert_industry_mappings,
-            get_mappings_for_date, mark_news_status, reset_news_to_pending,
+            mark_news_status, reset_news_to_pending,
+        )
+        from skills.market_opinion_db import (
+            init_market_opinion_table, insert_opinions,
+            delete_opinions_for_source_date, get_active_opinions,
         )
 
         engine = get_engine()
         init_news_tables(engine)
+        init_market_opinion_table(engine)
 
         td = str(trade_date)
 
@@ -111,7 +116,7 @@ class NewsAgent(BaseAgent):
             reset_cnt = reset_news_to_pending(engine, td)
             if reset_cnt:
                 logger.info("[NewsAgent] force=True：重置 %d 条新闻为 pending", reset_cnt)
-            delete_mappings_for_date(engine, td)
+            delete_opinions_for_source_date(engine, "news", td)
 
         pending = get_pending_news(engine, td)
 
@@ -149,12 +154,15 @@ class NewsAgent(BaseAgent):
         # ── Step 2：读取流量分（来自第一条新闻的 extra 字段）───────────────
         flow_score = self._extract_flow_score(pending)
 
-        # ── Step 3：行业映射 LLM 分析 ────────────────────────────────────
-        delete_mappings_for_date(engine, td)   # 清除旧映射（支持幂等重跑）
+        # ── Step 3：行业映射 LLM 分析 → 统一市场观点库 ──────────────────
+        delete_opinions_for_source_date(engine, "news", td)   # 清除旧观点（幂等重跑）
         mapping_raw = self._industry_mapping_agent(pending, trade_date)
 
-        # 验证并写库
-        mapping_records = []
+        # 构建 news_id → 原始新闻 的索引（补充来源/发布时间）
+        news_by_id = {n["id"]: n for n in pending}
+
+        # 验证并转成统一观点，写入 market_opinions（source_type=news）
+        opinion_records = []
         for m in mapping_raw:
             news_id = m.get("news_id")
             if not news_id:
@@ -162,22 +170,35 @@ class NewsAgent(BaseAgent):
             industry = str(m.get("industry_name", "")).strip()
             if not industry:
                 continue
-            mapping_records.append({
-                "news_id":       news_id,
-                "trade_date":    td,
-                "industry_name": industry,
-                "sentiment":     m.get("sentiment", "neutral"),
-                "impact_score":  _clamp(m.get("impact_score"), 0.0, 1.0),
-                "confidence":    _clamp(m.get("confidence"),   0.0, 1.0),
-                "reason":        str(m.get("reason", ""))[:300],
+            impact = _clamp(m.get("impact_score"), 0.0, 1.0)
+            conf   = _clamp(m.get("confidence"),   0.0, 1.0)
+            src    = news_by_id.get(news_id, {})
+            opinion_records.append({
+                "source_type":  "news",
+                "source_name":  src.get("platform") or src.get("source") or "news",
+                "raw_ref":      str(news_id),
+                "target_type":  "sector",
+                "target_name":  industry,
+                "direction":    m.get("sentiment", "neutral"),
+                "strength":     (impact * 100) if impact is not None else None,
+                "confidence":   conf,
+                "reason":       str(m.get("reason", ""))[:300],
+                "horizon":      "short",           # 新闻观点时效短（3 天）
+                "publish_time": src.get("publish_time") or td,
+                "trade_date":   td,
             })
-        insert_industry_mappings(engine, mapping_records)
+        insert_opinions(engine, opinion_records)
 
-        # ── Step 4：汇总行业映射 → top_sectors ──────────────────────────
-        all_mappings  = get_mappings_for_date(engine, td)
-        top_sectors   = self._build_top_sectors(all_mappings)
+        # ── Step 4：从统一观点库读取当天新闻观点 → top_sectors ──────────
+        news_opinions = get_active_opinions(
+            engine, source_type="news", trade_date=td,
+            include_expired=True, with_weight=False,
+        )
+        # 统一观点 → 旧聚合逻辑所需的 mapping 结构
+        all_mappings   = [_opinion_to_mapping(o) for o in news_opinions]
+        top_sectors    = self._build_top_sectors(all_mappings)
         sentiment_info = self._calc_sentiment(pending, all_mappings, flow_score)
-        summary       = self._build_summary(trade_date, top_sectors, sentiment_info, flow_score)
+        summary        = self._build_summary(trade_date, top_sectors, sentiment_info, flow_score)
 
         success_rate  = flow_score.get("active_platforms", 0) / max(
             sum(1 for p in pending if p.get("source") != "hot_topic"), 1
@@ -464,6 +485,19 @@ class NewsAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 # 模块级工具
 # ---------------------------------------------------------------------------
+
+def _opinion_to_mapping(o: dict) -> dict:
+    """把 market_opinions 行还原成旧 mapping 结构，复用聚合/情绪计算逻辑"""
+    strength = o.get("strength")
+    return {
+        "news_id":       o.get("raw_ref"),
+        "industry_name": o.get("target_name", ""),
+        "sentiment":     o.get("direction", "neutral"),
+        "impact_score":  (float(strength) / 100.0) if strength is not None else 0.5,
+        "confidence":    o.get("confidence"),
+        "reason":        o.get("reason", ""),
+    }
+
 
 def _clamp(val, lo: float, hi: float) -> float | None:
     if val is None:

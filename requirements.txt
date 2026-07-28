@@ -33,5 +33,17 @@ matplotlib>=3.8.0
 # Scheduler (定时/事件驱动任务调度)
 apscheduler>=3.10.0
 
+# ---- Web 后端（FastAPI + Uvicorn）----
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.6.0
+python-multipart>=0.0.9
+
+# ---- 研报 RAG 模块（多格式文档解析）----
+# Word 文档解析
+python-docx>=1.1.0
+# 纯文字 PDF 文本提取
+pypdf>=4.0.0
+
 # Optional: HTML report generation
 # markdown>=3.6
