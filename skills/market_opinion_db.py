@@ -419,6 +419,7 @@ def aggregate_by_target(
             "sources":        set(),
             "_best_w":        -1.0,
             "top_reason":     "",
+            "_latest_pt":     None,
         })
         direction = o.get("direction", "neutral")
         if direction == "bullish":
@@ -427,6 +428,9 @@ def aggregate_by_target(
             bucket["bearish_weight"] += w
         bucket["opinion_count"] += 1
         bucket["sources"].add(o.get("source_type", ""))
+        pt = o.get("publish_time")
+        if pt and (bucket["_latest_pt"] is None or pt > bucket["_latest_pt"]):
+            bucket["_latest_pt"] = pt
         if w > bucket["_best_w"] and o.get("reason"):
             bucket["_best_w"]    = w
             bucket["top_reason"] = o["reason"]
@@ -437,6 +441,7 @@ def aggregate_by_target(
         total  = bw + ew + 1e-9
         net    = (bw - ew) / total
         direction = "bullish" if net > 0.15 else ("bearish" if net < -0.15 else "neutral")
+        latest_pt = b["_latest_pt"]
         results.append({
             "target_name":    name,
             "net_score":      round(net, 3),
@@ -446,6 +451,7 @@ def aggregate_by_target(
             "opinion_count":  b["opinion_count"],
             "sources":        sorted(s for s in b["sources"] if s),
             "top_reason":     b["top_reason"],
+            "latest_time":    latest_pt.strftime("%Y-%m-%d %H:%M") if hasattr(latest_pt, "strftime") else (str(latest_pt)[:16] if latest_pt else None),
         })
 
     results.sort(key=lambda x: abs(x["net_score"]) * x["opinion_count"], reverse=True)

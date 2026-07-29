@@ -24,7 +24,7 @@ export interface HeatmapData { sectors: string[]; dates: string[]; matrix: { sec
 export interface Opinion {
   target_name: string; net_score: number; direction: string
   bullish_weight: number; bearish_weight: number; opinion_count: number
-  sources: string[]; top_reason: string
+  sources: string[]; top_reason: string; latest_time?: string | null
 }
 
 export interface SummaryResp { found: boolean; date: string | null; summary: string; confidence: number | null }

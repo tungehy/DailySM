@@ -438,11 +438,17 @@ class NewsCrawler:
             logger.warning("[NewsCrawler] LLM 预处理调用失败: %s", e)
             return [{}] * len(batch)
 
-        if not isinstance(raw, list):
-            if isinstance(raw, dict):
-                raw = list(raw.values())[0] if raw else []
+        # 归一化为 list[dict]：LLM 可能返回数组、单个对象、或包了一层的字典
+        if isinstance(raw, dict):
+            if "index" in raw:
+                # 单个分析对象（未包数组）
+                raw = [raw]
             else:
-                return [{}] * len(batch)
+                # 外层包了一层，如 {"result": [...]} / {"data": {...}}
+                inner = next((v for v in raw.values() if isinstance(v, (list, dict))), None)
+                raw = [inner] if isinstance(inner, dict) else (inner if isinstance(inner, list) else [])
+        if not isinstance(raw, list):
+            return [{}] * len(batch)
 
         enriched: list[dict] = [{}] * len(batch)
         for item in raw:

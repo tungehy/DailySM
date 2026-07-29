@@ -9,12 +9,19 @@ interface Props {
   format?: (v: number) => string
 }
 
-function Tip({ active, payload, label, format }: any) {
+/** 2026-07-28 -> 07-28 */
+function mmdd(d: any): string {
+  const s = String(d ?? '')
+  return s.length >= 10 ? s.slice(5, 10) : s
+}
+
+function Tip({ active, payload, format }: any) {
   if (!active || !payload || payload.length === 0) return null
   const v = payload[0].value
+  const date = payload[0]?.payload?.date
   return (
     <div className="px-2 py-1 rounded-md bg-ink-900 text-white text-xs shadow-lg">
-      <div className="opacity-70">{label}</div>
+      <div className="opacity-70">{mmdd(date)}</div>
       <div className="font-semibold">{v == null ? '--' : (format ? format(v) : Number(v).toFixed(2))}</div>
     </div>
   )

@@ -42,11 +42,10 @@ export default function System() {
           // B站 / 下载 / 转录
           'bilibili.days_filter': config.bilibili?.days_filter,
           'bilibili.request_interval': config.bilibili?.request_interval,
+          'bilibili.up_hosts': (config.bilibili?.up_hosts || []).filter((u: any) => u && u.uid),
           'bilibili.sessdata': config.bilibili?.sessdata,
           'bilibili.bili_jct': config.bilibili?.bili_jct,
           'bilibili.dedeuserid': config.bilibili?.dedeuserid,
-          'download.audio_quality': config.download?.audio_quality,
-          'download.max_retries': config.download?.max_retries,
           'transcription.model_size': config.transcription?.model_size,
           'transcription.device': config.transcription?.device,
         },
@@ -67,6 +66,13 @@ export default function System() {
       return copy
     })
   }
+
+  const upHosts = (): any[] => (config?.bilibili?.up_hosts || [])
+  const setUpHosts = (list: any[]) => set(['bilibili', 'up_hosts'], list)
+  const addUpHost = () => setUpHosts([...upHosts(), { uid: '', name: '', max_videos: 1 }])
+  const removeUpHost = (i: number) => setUpHosts(upHosts().filter((_, j) => j !== i))
+  const setUpHost = (i: number, key: string, val: any) =>
+    setUpHosts(upHosts().map((u, j) => (j === i ? { ...u, [key]: val } : u)))
 
   const agentSched = schedules?.agents || {}
 
@@ -186,14 +192,35 @@ export default function System() {
             <Field label="请求间隔（秒）">
               <NumInput value={config?.bilibili?.request_interval} onChange={v => set(['bilibili', 'request_interval'], v)} />
             </Field>
-          </Card>
-          <Card title="音频下载">
-            <Field label="音质">
-              <NumInput value={config?.download?.audio_quality} onChange={v => set(['download', 'audio_quality'], v)} />
-            </Field>
-            <Field label="最大重试次数">
-              <NumInput value={config?.download?.max_retries} onChange={v => set(['download', 'max_retries'], v)} />
-            </Field>
+            <div className="mt-3 pt-3 border-t border-ink-100">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-ink-800">B 站目标 UP 主配置</span>
+                <button onClick={addUpHost}
+                        className="px-2.5 py-1 rounded-lg bg-accent text-white text-xs font-medium">
+                  + 添加 UP 主
+                </button>
+              </div>
+              <div className="space-y-2">
+                {(config?.bilibili?.up_hosts || []).map((u: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input type="text" value={u?.uid ?? ''} placeholder="uid"
+                           onChange={e => setUpHost(i, 'uid', e.target.value)}
+                           className="w-32 px-2 py-1.5 rounded border border-ink-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                    <input type="text" value={u?.name ?? ''} placeholder="name"
+                           onChange={e => setUpHost(i, 'name', e.target.value)}
+                           className="flex-1 px-2 py-1.5 rounded border border-ink-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                    <input type="number" value={u?.max_videos ?? ''} placeholder="max_videos" min={1}
+                           onChange={e => setUpHost(i, 'max_videos', Number(e.target.value))}
+                           className="w-24 px-2 py-1.5 rounded border border-ink-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                    <button onClick={() => removeUpHost(i)}
+                            className="px-2 text-ink-300 hover:text-up text-lg leading-none shrink-0" title="删除">×</button>
+                  </div>
+                ))}
+                {(config?.bilibili?.up_hosts || []).length === 0 && (
+                  <div className="text-xs text-ink-400 py-1">暂无 UP 主，点击右上角「+ 添加 UP 主」</div>
+                )}
+              </div>
+            </div>
           </Card>
           <Card title="Whisper 转录">
             <Field label="模型大小">

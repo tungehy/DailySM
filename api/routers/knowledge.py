@@ -20,12 +20,24 @@ _import_lock = threading.Lock()
 
 
 @router.get("/reports")
-def list_reports(limit: int = 100):
-    """研报列表（含处理状态）"""
+def list_reports(limit: int = 100, date_from: str | None = None, date_to: str | None = None):
+    """研报列表（含处理状态），支持按发布日期区间筛选 date_from/date_to=YYYY-MM-DD"""
     from skills.research_db import list_reports
 
     engine = get_engine()
     rows = list_reports(engine, limit=limit)
+    if date_from or date_to:
+        def _in_range(r):
+            pt = r.get("publish_time")
+            pt = (pt.strftime("%Y-%m-%d") if hasattr(pt, "strftime") else str(pt or ""))[:10]
+            if not pt:
+                return True   # 无日期的处理中记录始终保留
+            if date_from and pt < date_from:
+                return False
+            if date_to and pt > date_to:
+                return False
+            return True
+        rows = [r for r in rows if _in_range(r)]
     for r in rows:
         # 内存里若有处理状态，优先标注（刚上传未入库的不在此列表）
         rid = str(r.get("id"))
@@ -134,6 +146,32 @@ def delete_report(report_id: str):
     if n == 0:
         raise HTTPException(status_code=404, detail="研报不存在")
     return {"deleted": n}
+
+
+from pydantic import BaseModel
+
+
+class BatchDeleteIn(BaseModel):
+    ids: list[int]
+
+
+@router.post("/reports/batch-delete")
+def batch_delete_reports(body: BatchDeleteIn):
+    """批量删除研报（含向量切块）"""
+    from skills.research_db import delete_report as _del
+
+    engine = get_engine()
+    deleted = 0
+    for rid in body.ids:
+        try:
+            deleted += _del(engine, int(rid))
+        except Exception:
+            continue
+    # 清除对应内存状态
+    with _import_lock:
+        for rid in body.ids:
+            _import_status.pop(str(rid), None)
+    return {"deleted": deleted, "requested": len(body.ids)}
 
 
 ALLOWED_EXT = {".md", ".txt", ".json", ".docx", ".pdf"}
