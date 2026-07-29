@@ -149,12 +149,12 @@ class MacroAgent(BaseAgent):
         # 4. 构造 top_sectors
         top_sectors = self._build_top_sectors(sector_view)
 
-        # 5. 摘要
+        # 5. 摘要（完整三段报告，不再硬截断）
         summary = (
             f"## 宏观分析报告（{trade_date}）\n\n"
-            f"### 宏观总量\n{macro_report[:500]}…\n\n"
-            f"### 政策流动性\n{policy_report[:400]}…\n\n"
-            f"### 综合策略\n{chief_report[:600]}…"
+            f"### 宏观总量\n{macro_report}\n\n"
+            f"### 政策流动性\n{policy_report}\n\n"
+            f"### 综合策略\n{chief_report}"
         )
 
         # 数据覆盖度（5 个指标）

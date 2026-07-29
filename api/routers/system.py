@@ -42,9 +42,18 @@ _EDITABLE_TOP = {
 
 @router.put("/config")
 def update_config(req: ConfigUpdate):
-    """按 dotted path 修改 config.yaml 常用配置（白名单 + 不回写脱敏值）"""
-    import yaml
-    cfg = load_yaml(CONFIG_PATH)
+    """按 dotted path 修改 config.yaml 常用配置（白名单 + 不回写脱敏值）。
+
+    使用 ruamel.yaml round-trip 模式读写，保留原文件中的注释与排版。
+    """
+    from ruamel.yaml import YAML
+
+    yaml_rt = YAML(typ="rt")          # round-trip：保留注释/格式
+    yaml_rt.preserve_quotes = True
+    yaml_rt.width = 10 ** 6           # 不自动换行长字符串
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = yaml_rt.load(f)
+
     for key, value in req.updates.items():
         top = key.split(".")[0]
         if top not in _EDITABLE_TOP:
@@ -52,8 +61,9 @@ def update_config(req: ConfigUpdate):
         if value == "***":     # 脱敏占位符，跳过
             continue
         _set_nested(cfg, key, value)
+
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        yaml_rt.dump(cfg, f)
     return {"ok": True, "updated": list(req.updates.keys())}
 
 

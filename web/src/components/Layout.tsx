@@ -12,8 +12,8 @@ const NAV = [
 export default function Layout() {
   return (
     <div className="min-h-screen flex">
-      {/* 侧边栏 */}
-      <aside className="w-60 shrink-0 border-r border-ink-200 bg-white flex flex-col">
+      {/* 侧边栏（固定，不随主内容滚动） */}
+      <aside className="w-60 shrink-0 border-r border-ink-200 bg-white flex flex-col sticky top-0 h-screen">
         <div className="px-5 py-5 border-b border-ink-100">
           <div className="text-lg font-bold text-ink-900">DailySM</div>
           <div className="text-xs text-ink-400 mt-0.5">行业智能投研平台</div>

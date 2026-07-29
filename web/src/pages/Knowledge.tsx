@@ -25,14 +25,23 @@ export default function Knowledge() {
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [results, setResults] = useState<any[] | null>(null)
+  // 批量操作
+  const [batchMode, setBatchMode] = useState(false)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [deleting, setDeleting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const loadList = () => {
-    api.get<{ reports: ReportItem[] }>('/api/knowledge/reports?limit=200')
+    const params = new URLSearchParams({ limit: '200' })
+    if (dateFrom) params.set('date_from', dateFrom)
+    if (dateTo) params.set('date_to', dateTo)
+    api.get<{ reports: ReportItem[] }>(`/api/knowledge/reports?${params}`)
       .then(r => setReports(r.reports))
       .finally(() => setLoadingList(false))
   }
-  useEffect(() => { setLoadingList(true); loadList() }, [])
+  useEffect(() => { setLoadingList(true); loadList() }, [dateFrom, dateTo])
 
   // 处理中任务轮询刷新
   const hasProcessing = useMemo(() => reports.some(r => r.status === 'processing'), [reports])
@@ -46,6 +55,12 @@ export default function Knowledge() {
     () => reports.filter(r => (r.title || '').includes(searchText)),
     [reports, searchText],
   )
+  // 可勾选（已完成/失败）的研报 id
+  const selectableIds = useMemo(
+    () => filtered.filter(r => typeof r.id === 'number').map(r => r.id as number),
+    [filtered],
+  )
+  const allChecked = selectableIds.length > 0 && selectableIds.every(id => checked.has(id))
 
   const openDetail = (id: number | string) => {
     if (typeof id !== 'number') return
@@ -71,6 +86,33 @@ export default function Knowledge() {
     await api.delete(`/api/knowledge/reports/${id}`)
     if (selected?.id === id) setSelected(null)
     loadList()
+  }
+
+  const toggleBatch = () => {
+    setBatchMode(b => !b)
+    setChecked(new Set())
+  }
+  const toggleOne = (id: number) => {
+    setChecked(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  const toggleAll = () => {
+    setChecked(allChecked ? new Set() : new Set(selectableIds))
+  }
+  const batchDelete = async () => {
+    const ids = Array.from(checked)
+    if (ids.length === 0) return
+    if (!confirm(`确定删除选中的 ${ids.length} 份研报（含向量切块）？`)) return
+    setDeleting(true)
+    try {
+      await api.post('/api/knowledge/reports/batch-delete', { ids })
+      if (selected && ids.includes(selected.id as number)) setSelected(null)
+      setChecked(new Set())
+      loadList()
+    } finally { setDeleting(false) }
   }
 
   const doSearch = async () => {
@@ -125,62 +167,102 @@ export default function Knowledge() {
 
       {/* 研报库：左列表 1 / 右预览 2 */}
       <section className="card overflow-hidden">
-        {/* 顶部工具栏 */}
-        <div className="border-b border-ink-100 p-4 space-y-3">
-          <div className="flex items-center gap-3">
-            <input value={searchText} onChange={e => setSearchText(e.target.value)}
-                   placeholder="搜索研报名称…"
-                   className="max-w-md flex-1 px-3 py-2 rounded-lg border border-ink-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
-            <div className="ml-auto flex gap-2">
-              <input ref={fileRef} type="file" multiple accept=".md,.txt,.json,.docx,.pdf"
-                     className="hidden" onChange={e => onUpload(e.target.files)} />
-              <button onClick={() => fileRef.current?.click()} disabled={uploading}
-                      className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium disabled:opacity-50">
-                {uploading ? '上传中…' : '批量导入研报'}
-              </button>
-            </div>
-          </div>
-          {/* 状态条 */}
-          {reports.length > 0 && (
-            <div className={`px-3 py-2 rounded-lg border-l-4 text-sm flex items-center gap-2 ${
-              processingCount > 0 ? 'bg-blue-50 border-accent text-accent' : 'bg-ink-50 border-ink-300 text-ink-600'
-            }`}>
-              {processingCount > 0
-                ? <><span className="inline-block h-3 w-3 rounded-full border-2 border-accent/40 border-t-accent animate-spin" />正在处理 {processingCount} 个研报…</>
-                : <>共 {reports.length} 个研报{failedCount > 0 && <span className="text-up">（失败 {failedCount}）</span>}</>}
-            </div>
-          )}
-        </div>
-
-        {/* 左右分栏：列表 1 / 预览 2 */}
-        <div className="flex" style={{ height: 640 }}>
-          {/* 左：列表 */}
-          <div className="w-1/3 min-w-[280px] border-r border-ink-100 overflow-y-auto">
-            {loadingList ? <Spinner /> : filtered.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-ink-300 gap-3">
-                <Empty text="还没有研报" />
-                <button onClick={() => fileRef.current?.click()} className="px-4 py-2 rounded-lg bg-accent text-white text-sm">上传研报</button>
+        {/* 左右分栏：左列表(含工具栏) 1 / 右预览 2 */}
+        <div className="flex" style={{ height: 680 }}>
+          {/* 左：工具栏 + 列表 */}
+          <div className="w-1/3 min-w-[300px] border-r border-ink-100 flex flex-col">
+            {/* 工具栏：搜索 + 导入 + 批量操作 */}
+            <div className="border-b border-ink-100 p-3 space-y-2">
+              <input value={searchText} onChange={e => setSearchText(e.target.value)}
+                     placeholder="搜索研报名称…"
+                     className="w-full px-3 py-2 rounded-lg border border-ink-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+              <div className="flex gap-2">
+                <input ref={fileRef} type="file" multiple accept=".md,.txt,.json,.docx,.pdf"
+                       className="hidden" onChange={e => onUpload(e.target.files)} />
+                <button onClick={() => fileRef.current?.click()} disabled={uploading}
+                        className="flex-1 px-3 py-2 rounded-lg bg-accent text-white text-sm font-medium disabled:opacity-50">
+                  {uploading ? '上传中…' : '导入研报'}
+                </button>
+                <button onClick={toggleBatch}
+                        className={`px-3 py-2 rounded-lg text-sm font-medium border ${
+                          batchMode ? 'bg-accent-soft border-accent text-accent' : 'border-ink-200 text-ink-600 hover:bg-ink-100'}`}>
+                  批量操作
+                </button>
               </div>
-            ) : filtered.map(r => (
-              <div key={String(r.id)} onClick={() => openDetail(r.id)}
-                   className={`px-4 py-3 cursor-pointer border-b border-ink-50 hover:bg-ink-50 ${
-                     selected?.id === r.id ? 'bg-accent-soft' : ''}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-ink-900 truncate">{r.title}</span>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {statusBadge(r.status)}
-                    <button onClick={e => { e.stopPropagation(); onDelete(r.id) }}
-                            className="text-xs text-ink-300 hover:text-up">删除</button>
+
+              {/* 批量操作子栏：日期筛选 + 全选 + 删除 */}
+              {batchMode && (
+                <div className="pt-2 space-y-2 border-t border-ink-100">
+                  <div className="flex items-center gap-2 text-xs">
+                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                           className="flex-1 px-2 py-1 rounded border border-ink-200 text-xs" />
+                    <span className="text-ink-400">至</span>
+                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                           className="flex-1 px-2 py-1 rounded border border-ink-200 text-xs" />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={toggleAll}
+                            className="flex-1 px-3 py-1.5 rounded-lg border border-ink-200 text-sm text-ink-600 hover:bg-ink-100">
+                      {allChecked ? '取消全选' : '全选'}
+                    </button>
+                    <button onClick={batchDelete} disabled={checked.size === 0 || deleting}
+                            className="flex-1 px-3 py-1.5 rounded-lg bg-up text-white text-sm font-medium disabled:opacity-40">
+                      {deleting ? '删除中…' : `删除 (${checked.size})`}
+                    </button>
                   </div>
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-400">
-                  {r.institution && <span>{r.institution}</span>}
-                  {r.report_type && <span>{TYPE_CN[r.report_type] || r.report_type}</span>}
-                  <span>{(r.publish_time || '').slice(0, 10)}</span>
-                  <span>{r.chunk_count} 块</span>
+              )}
+
+              {/* 状态条 */}
+              {reports.length > 0 && (
+                <div className={`px-3 py-1.5 rounded-lg border-l-4 text-xs flex items-center gap-2 ${
+                  processingCount > 0 ? 'bg-blue-50 border-accent text-accent' : 'bg-ink-50 border-ink-300 text-ink-600'
+                }`}>
+                  {processingCount > 0
+                    ? <><span className="inline-block h-3 w-3 rounded-full border-2 border-accent/40 border-t-accent animate-spin" />正在处理 {processingCount} 个…</>
+                    : <>共 {reports.length} 个研报{failedCount > 0 && <span className="text-up">（失败 {failedCount}）</span>}</>}
                 </div>
-              </div>
-            ))}
+              )}
+            </div>
+
+            {/* 列表 */}
+            <div className="flex-1 overflow-y-auto">
+              {loadingList ? <Spinner /> : filtered.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-ink-300 gap-3 p-4">
+                  <Empty text="还没有研报" />
+                  <button onClick={() => fileRef.current?.click()} className="px-4 py-2 rounded-lg bg-accent text-white text-sm">上传研报</button>
+                </div>
+              ) : filtered.map(r => (
+                <div key={String(r.id)} onClick={() => openDetail(r.id)}
+                     className={`flex items-start gap-2 px-3 py-3 cursor-pointer border-b border-ink-50 hover:bg-ink-50 ${
+                       selected?.id === r.id ? 'bg-accent-soft' : ''}`}>
+                  {batchMode && typeof r.id === 'number' && (
+                    <input type="checkbox" checked={checked.has(r.id as number)}
+                           onClick={e => e.stopPropagation()}
+                           onChange={() => toggleOne(r.id as number)}
+                           className="mt-1 h-4 w-4 accent-accent shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-ink-900 truncate">{r.title}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {statusBadge(r.status)}
+                        {!batchMode && (
+                          <button onClick={e => { e.stopPropagation(); onDelete(r.id) }}
+                                  className="text-xs text-ink-300 hover:text-up">删除</button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-400">
+                      {r.institution && <span>{r.institution}</span>}
+                      {r.report_type && <span>{TYPE_CN[r.report_type] || r.report_type}</span>}
+                      <span>{(r.publish_time || '').slice(0, 10)}</span>
+                      <span>{r.chunk_count} 块</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* 右：原件预览 */}
