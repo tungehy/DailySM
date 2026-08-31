@@ -136,11 +136,51 @@ class AudioDownloader:
             ]
         # ffmpeg 不可用时不加 postprocessors，保留原生 m4a
 
-        # cookies 文件对 yt-dlp 同样生效（解锁大会员内容）
-        if config.cookies_file:
-            opts["cookiefile"] = config.cookies_file
+        # cookies 对 yt-dlp 同样生效（解锁登录态，避免 412 风控）
+        cookie_file = self._resolve_cookie_file()
+        if cookie_file:
+            opts["cookiefile"] = cookie_file
 
         return opts
+
+    @staticmethod
+    def _resolve_cookie_file() -> str:
+        """
+        解析 yt-dlp 可用的 cookies 文件路径：
+          1. 优先使用 download.cookies_file（用户显式配置的 Netscape 文件）
+          2. 否则用 bilibili.sessdata / bili_jct / dedeuserid 自动生成一个
+             临时 Netscape cookies 文件（缓存在 data/ 下，避免每次重建）
+        """
+        if config.cookies_file:
+            return config.cookies_file
+
+        sessdata   = config.get("bilibili", "sessdata",   default="")
+        bili_jct   = config.get("bilibili", "bili_jct",   default="")
+        dedeuserid = config.get("bilibili", "dedeuserid", default="")
+        if not sessdata:
+            return ""
+
+        from urllib.parse import unquote
+        # SESSDATA 配置里是 URL 编码形式，写文件前解码为原始值
+        sessdata = unquote(sessdata)
+        lines = [
+            "# Netscape HTTP Cookie File",
+            "# 由 config.yaml 的 bilibili.sessdata 自动生成，请勿手动编辑",
+            ".bilibili.com\tTRUE\t/\tFALSE\t1999999999\tSESSDATA\t" + sessdata,
+        ]
+        if bili_jct:
+            lines.append(".bilibili.com\tTRUE\t/\tFALSE\t1999999999\tbili_jct\t" + bili_jct)
+        if dedeuserid:
+            lines.append(".bilibili.com\tTRUE\t/\tFALSE\t1999999999\tDedeUserID\t" + dedeuserid)
+
+        cookie_path = config.audio_dir.parent / "_bili_cookies.txt"
+        try:
+            cookie_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            logger.info("已根据 bilibili.sessdata 生成 yt-dlp cookies 文件: %s", cookie_path)
+            return str(cookie_path)
+        except Exception as e:
+            logger.warning("生成 cookies 文件失败: %s", e)
+            return ""
 
 
 class _YtDlpLogger:

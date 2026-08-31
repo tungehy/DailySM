@@ -22,6 +22,43 @@ if _FASTER_WHISPER_DIR.exists() and str(_FASTER_WHISPER_DIR) not in sys.path:
     sys.path.insert(0, str(_FASTER_WHISPER_DIR))
 
 
+def _register_nvidia_dll_dirs() -> None:
+    """
+    把 pip 安装的 NVIDIA 运行时库（cuBLAS/cuDNN 等）的 bin 目录注册进
+    Windows DLL 搜索路径，使 ctranslate2 能找到 cublas64_12.dll / cudnn64_9.dll。
+    需在 import faster_whisper / ctranslate2 之前调用。
+    """
+    if sys.platform != "win32":
+        return
+    import os
+    import site
+
+    candidates: list[Path] = []
+    for sp in site.getsitepackages() + [site.getusersitepackages()]:
+        nvidia_dir = Path(sp) / "nvidia"
+        if nvidia_dir.is_dir():
+            candidates.extend(p for p in nvidia_dir.glob("*/bin") if p.is_dir())
+            # 部分版本 DLL 直接放在包根目录
+            candidates.extend(p for p in nvidia_dir.glob("*/lib") if p.is_dir())
+
+    added: list[str] = []
+    for d in candidates:
+        s = str(d)
+        try:
+            os.add_dll_directory(s)
+            added.append(s)
+        except (OSError, FileNotFoundError):
+            continue
+        # 同时附加到 PATH，兼顾通过 PATH 查找的加载方式
+        if s not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = s + os.pathsep + os.environ.get("PATH", "")
+    if added:
+        logger.debug("已注册 NVIDIA DLL 目录: %s", "; ".join(added))
+
+
+_register_nvidia_dll_dirs()
+
+
 @dataclass
 class TranscriptSegment:
     start: float
